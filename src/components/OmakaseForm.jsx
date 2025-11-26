@@ -1,37 +1,18 @@
 import React, { useState } from 'react';
 import axios from 'axios';
-import { Send, CreditCard, MapPin, Lock, Check } from 'lucide-react';
+import { Send, CreditCard, MapPin, Lock, Check, Calendar, AlertCircle, Phone } from 'lucide-react';
 
-export default function TicketForm() {
-    // Detectar qué evento es desde la URL
-    const urlParams = new URLSearchParams(window.location.search);
-    const eventType = urlParams.get('event') || 'mangrove';
-    
-    // API URL desde variables de entorno
-    const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3000';
-    
-    const EVENT_INFO = {
-      mangrove: {
-        name: "The Mangrove",
-        subtitle: "New Year's Eve 2026",
-        description: "Exclusive celebration at Mangrove Restaurant in Biras Marina",
-        logo: `${API_URL}/images/themangrove.jpg`
-      },
-      ikigai: {
-        name: "Ikigai",
-        subtitle: "New Year's Eve 2026",
-        description: "Exclusive Japanese/Caribbean fusion celebration",
-        logo: `${API_URL}/images/ikigai.jpg`
-      }
-    };
-
-  const currentEvent = EVENT_INFO[eventType];
-
+export default function OmakaseForm() {
   const [formData, setFormData] = useState({
     firstName: '',
     lastName: '',
     email: '',
+    phone: '',
     guests: 1,
+    reservationDate: '',
+    reservationTime: '',
+    allergies: '',
+    specialRequests: '',
     cardNumber: '',
     expDate: '',
     cvv: '',
@@ -42,15 +23,36 @@ export default function TicketForm() {
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState('');
+  const [availability, setAvailability] = useState(null);
+  const [checkingAvailability, setCheckingAvailability] = useState(false);
 
-  const EVENT_PRICES = {
-    mangrove: 260,
-    ikigai: 280
+  const PRICE_PER_PERSON = 330;
+  const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3000';
+
+  // Horarios disponibles (19:30 - 21:30, intervalos de 30 minutos)
+  const AVAILABLE_TIMES = [
+    '19:30',
+    '20:00',
+    '20:30',
+    '21:00',
+    '21:30'
+  ];
+
+  const totalAmount = formData.guests * PRICE_PER_PERSON;
+
+  // Función para verificar si una fecha es jueves (mejorada)
+  const isThursday = (dateString) => {
+    if (!dateString) return false;
+    const date = new Date(dateString + 'T00:00:00'); // Agregar hora para evitar problemas de timezone
+    return date.getDay() === 4; // 4 = jueves
   };
-  
-  const TICKET_PRICE = EVENT_PRICES[eventType] || EVENT_PRICES.mangrove;
 
-  const totalAmount = formData.guests * TICKET_PRICE;
+  // Obtener la fecha mínima (mañana)
+  const getMinDate = () => {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    return tomorrow.toISOString().split('T')[0];
+  };
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -58,14 +60,55 @@ export default function TicketForm() {
       ...prev,
       [name]: value
     }));
+
+    // Si cambia la fecha, horario o cantidad de invitados, resetear availability
+    if (name === 'reservationDate' || name === 'reservationTime' || name === 'guests') {
+      setAvailability(null);
+    }
+  };
+
+  // Verificar disponibilidad
+  const checkAvailability = async () => {
+    if (!formData.reservationDate || !formData.reservationTime || !formData.guests) {
+      setError('Please select a date, time, and number of guests');
+      return;
+    }
+
+    setCheckingAvailability(true);
+    setError('');
+
+    try {
+      const response = await axios.post(`${API_URL}/api/omakase/availability`, {
+        reservationDate: formData.reservationDate,
+        reservationTime: formData.reservationTime,
+        guests: parseInt(formData.guests)
+      });
+
+      setAvailability(response.data);
+      
+      if (!response.data.available) {
+        setError(response.data.reason || 'Not available for this date and time');
+      }
+    } catch (err) {
+      setError('Error checking availability');
+    } finally {
+      setCheckingAvailability(false);
+    }
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    
+    if (!availability || !availability.available) {
+      setError('Please check availability first');
+      return;
+    }
+
     setLoading(true);
     setError('');
 
     try {
+      // 1. Procesar pago
       const paymentResponse = await axios.post(`${API_URL}/api/payment/process`, {
         cardNumber: formData.cardNumber,
         expDate: formData.expDate,
@@ -79,30 +122,41 @@ export default function TicketForm() {
         throw new Error('Payment was declined');
       }
 
-      const ticketResponse = await axios.post(`${API_URL}/api/tickets/create`, {
+      // 2. Crear reserva
+      const reservationResponse = await axios.post(`${API_URL}/api/omakase/create`, {
         firstName: formData.firstName,
         lastName: formData.lastName,
         email: formData.email,
-        guests: formData.guests,
+        phone: formData.phone,
+        guests: parseInt(formData.guests),
+        reservationDate: formData.reservationDate,
+        reservationTime: formData.reservationTime,
+        allergies: formData.allergies,
+        specialRequests: formData.specialRequests,
         paymentNumber: paymentResponse.data.numeroAutorizacion,
         tokenAuth: paymentResponse.data.tokenAuth,
-        complianceData: paymentResponse.data.complianceData,
-        eventType: eventType
+        complianceData: paymentResponse.data.complianceData
       });
 
-      if (ticketResponse.status === 201) {
+      if (reservationResponse.status === 201) {
         setSuccess(true);
         setFormData({
           firstName: '',
           lastName: '',
           email: '',
+          phone: '',
           guests: 1,
+          reservationDate: '',
+          reservationTime: '',
+          allergies: '',
+          specialRequests: '',
           cardNumber: '',
           expDate: '',
           cvv: '',
           zipCode: '',
           address: ''
         });
+        setAvailability(null);
       }
 
     } catch (err) {
@@ -175,13 +229,13 @@ export default function TicketForm() {
           <p style={{ 
             color: '#6b6b6b', 
             marginBottom: '35px', 
-            fontSize: '17px',
+            fontSize: '15px',
             lineHeight: '1.6',
             fontWeight: '400',
             position: 'relative',
             zIndex: 1
           }}>
-            Your tickets for <strong style={{ color: '#b8956a' }}>{currentEvent.name}</strong> have been confirmed. A confirmation email has been sent to your inbox.
+            Your Omakase experience at <strong style={{ color: '#b8956a' }}>Ikigai</strong> has been confirmed. A confirmation email has been sent to your inbox.
           </p>
           <button
             onClick={() => setSuccess(false)}
@@ -210,7 +264,7 @@ export default function TicketForm() {
               e.target.style.boxShadow = '0 4px 16px rgba(0, 0, 0, 0.2)';
             }}
           >
-            Purchase More Tickets
+            Make Another Reservation
           </button>
         </div>
       </div>
@@ -248,28 +302,28 @@ export default function TicketForm() {
             zIndex: 0
           }}></div>
 
-          {/* LOGO Y HEADER - SIN SEPARACIÓN */}
+          {/* LOGO Y HEADER */}
           <div style={{ 
             textAlign: 'center', 
             padding: '50px 50px 40px',
             position: 'relative',
             zIndex: 1
           }}>
-            {/* Logo con fondo negro */}
+            {/* Logo de Biras */}
             <div style={{ 
               display: 'inline-block',
-              background: '#000000',
-              padding: '30px 40px',
+              background: '#ffffff',
+              padding: '25px 35px',
               borderRadius: '12px',
               marginBottom: '30px',
-              boxShadow: '0 10px 40px rgba(0, 0, 0, 0.2), 0 0 0 1px rgba(255, 255, 255, 0.05)',
-              border: '1px solid #1a1a1a'
+              boxShadow: '0 10px 40px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(184, 149, 106, 0.1)',
+              border: '1px solid rgba(232, 229, 223, 0.5)'
             }}>
               <img 
-                src={currentEvent.logo}
-                alt={`${currentEvent.name} Logo`}
+                src={`${API_URL}/logo.png`}
+                alt="Biras Creek Resort"
                 style={{
-                  maxWidth: '380px',
+                  maxWidth: '180px',
                   width: '100%',
                   height: 'auto',
                   objectFit: 'contain',
@@ -279,30 +333,40 @@ export default function TicketForm() {
             </div>
 
             <p style={{ 
-              fontSize: '17px', 
+              fontSize: '11px', 
               color: '#b8956a',
               fontWeight: '600',
               letterSpacing: '2.5px',
-              marginBottom: '1px',
+              marginBottom: '12px',
               textTransform: 'uppercase'
             }}>
-              {currentEvent.subtitle}
+              Omakase Experience
             </p>
             
             <h1 style={{
               fontSize: '56px',
-              marginTop: '4px',
               fontWeight: '500',
               color: '#2c2c2c',
-              marginBottom: '10px',
+              marginBottom: '8px',
               letterSpacing: '0px',
               fontFamily: "'Cormorant Garamond', serif"
             }}>
-              {currentEvent.name}
+              Ikigai Omakase
             </h1>
+
+            <p style={{ 
+              fontSize: '24px', 
+              color: '#b8956a',
+              fontWeight: '300',
+              letterSpacing: '3px',
+              marginBottom: '20px',
+              fontFamily: "'Cormorant Garamond', serif"
+            }}>
+              生き甲斐
+            </p>
             
             <p style={{ 
-              fontSize: '17px', 
+              fontSize: '15px', 
               color: '#6b6b6b',
               fontWeight: '400',
               lineHeight: '1.5',
@@ -310,7 +374,7 @@ export default function TicketForm() {
               maxWidth: '600px',
               margin: '0 auto 25px'
             }}>
-              {currentEvent.description}
+              An intimate 12-seat omakase bar featuring the finest Japanese-Caribbean fusion cuisine at Biras Creek Resort
             </p>
             
             <div style={{
@@ -320,11 +384,31 @@ export default function TicketForm() {
               padding: '12px 32px',
               borderRadius: '8px',
               fontWeight: '500',
-              fontSize: '17px',
+              fontSize: '15px',
               letterSpacing: '0.3px',
-              boxShadow: '0 4px 16px rgba(0, 0, 0, 0.15)'
+              boxShadow: '0 4px 16px rgba(0, 0, 0, 0.15)',
+              marginBottom: '20px'
             }}>
-              ${TICKET_PRICE} USD per guest
+              $330 USD per person
+            </div>
+
+            <div style={{ 
+              fontSize: '13px', 
+              color: '#6b6b6b',
+              fontWeight: '400',
+              letterSpacing: '0.3px',
+              lineHeight: '1.8',
+              marginTop: '15px'
+            }}>
+              <p style={{ margin: '5px 0', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+                <span style={{ color: '#b8956a' }}>⏰</span> Omakase: 7:30 PM — 10:00 PM
+              </p>
+              <p style={{ margin: '5px 0', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+                <span style={{ color: '#b8956a' }}>👔</span> Dress Code: Elegant
+              </p>
+              <p style={{ margin: '5px 0', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', color: '#999' }}>
+                <span style={{ color: '#c53030' }}>🚫</span> Closed Thursdays & Holidays
+              </p>
             </div>
           </div>
 
@@ -335,7 +419,7 @@ export default function TicketForm() {
             margin: '0 50px'
           }}></div>
 
-          {/* FORMULARIO - SIN SALTO */}
+          {/* FORMULARIO */}
           <div style={{ padding: '40px 50px 50px' }}>
             
             {error && (
@@ -348,12 +432,280 @@ export default function TicketForm() {
                 borderRadius: '10px',
                 fontSize: '14px',
                 fontWeight: '400',
-                boxShadow: '0 4px 12px rgba(197, 48, 48, 0.1)'
+                boxShadow: '0 4px 12px rgba(197, 48, 48, 0.1)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '10px'
               }}>
+                <AlertCircle size={20} />
                 {error}
               </div>
             )}
 
+            {/* Sección de Fecha y Disponibilidad */}
+            <div style={{ marginBottom: '35px' }}>
+              <h3 style={{
+                fontSize: '11px',
+                fontWeight: '600',
+                color: '#b8956a',
+                marginBottom: '20px',
+                letterSpacing: '2px',
+                textTransform: 'uppercase',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px'
+              }}>
+                <Calendar size={16} />
+                Date, Time & Guests
+              </h3>
+              
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px', marginBottom: '16px' }}>
+                <div>
+                  <label style={{ 
+                    display: 'block', 
+                    fontSize: '14px', 
+                    fontWeight: '500', 
+                    color: '#6b6b6b', 
+                    marginBottom: '10px',
+                    letterSpacing: '0.3px'
+                  }}>
+                    Select Date
+                  </label>
+                  <input
+                    type="date"
+                    name="reservationDate"
+                    value={formData.reservationDate}
+                    onChange={handleChange}
+                    min={getMinDate()}
+                    required
+                    style={{
+                      width: '100%',
+                      padding: '16px 20px',
+                      border: '1px solid rgba(213, 208, 199, 0.5)',
+                      borderRadius: '8px',
+                      fontSize: '17px',
+                      outline: 'none',
+                      fontFamily: "'Inter', sans-serif",
+                      transition: 'all 0.2s ease',
+                      boxSizing: 'border-box',
+                      background: 'rgba(250, 250, 248, 0.5)',
+                      boxShadow: 'inset 0 1px 3px rgba(0, 0, 0, 0.05)'
+                    }}
+                    onFocus={(e) => {
+                      e.target.style.borderColor = '#b8956a';
+                      e.target.style.background = '#ffffff';
+                      e.target.style.boxShadow = '0 0 0 3px rgba(184, 149, 106, 0.1), inset 0 1px 3px rgba(0, 0, 0, 0.05)';
+                    }}
+                    onBlur={(e) => {
+                      e.target.style.borderColor = 'rgba(213, 208, 199, 0.5)';
+                      e.target.style.background = 'rgba(250, 250, 248, 0.5)';
+                      e.target.style.boxShadow = 'inset 0 1px 3px rgba(0, 0, 0, 0.05)';
+                    }}
+                  />
+                  {/* ⭐ MENSAJE SOLO SI ES JUEVES */}
+                  {formData.reservationDate && isThursday(formData.reservationDate) && (
+                    <p style={{ 
+                      color: '#c53030', 
+                      fontSize: '13px', 
+                      marginTop: '8px', 
+                      display: 'flex', 
+                      alignItems: 'center', 
+                      gap: '5px' 
+                    }}>
+                      <AlertCircle size={14} /> Closed on Thursdays
+                    </p>
+                  )}
+                </div>
+                <div>
+                  <label style={{ 
+                    display: 'block', 
+                    fontSize: '14px', 
+                    fontWeight: '500', 
+                    color: '#6b6b6b', 
+                    marginBottom: '10px',
+                    letterSpacing: '0.3px'
+                  }}>
+                    Select Time
+                  </label>
+                  <select
+                    name="reservationTime"
+                    value={formData.reservationTime}
+                    onChange={handleChange}
+                    required
+                    style={{
+                      width: '100%',
+                      padding: '16px 20px',
+                      border: '1px solid rgba(213, 208, 199, 0.5)',
+                      borderRadius: '8px',
+                      fontSize: '17px',
+                      outline: 'none',
+                      fontFamily: "'Inter', sans-serif",
+                      transition: 'all 0.2s ease',
+                      boxSizing: 'border-box',
+                      background: 'rgba(250, 250, 248, 0.5)',
+                      boxShadow: 'inset 0 1px 3px rgba(0, 0, 0, 0.05)',
+                      cursor: 'pointer'
+                    }}
+                    onFocus={(e) => {
+                      e.target.style.borderColor = '#b8956a';
+                      e.target.style.background = '#ffffff';
+                      e.target.style.boxShadow = '0 0 0 3px rgba(184, 149, 106, 0.1), inset 0 1px 3px rgba(0, 0, 0, 0.05)';
+                    }}
+                    onBlur={(e) => {
+                      e.target.style.borderColor = 'rgba(213, 208, 199, 0.5)';
+                      e.target.style.background = 'rgba(250, 250, 248, 0.5)';
+                      e.target.style.boxShadow = 'inset 0 1px 3px rgba(0, 0, 0, 0.05)';
+                    }}
+                  >
+                    <option value="">Choose a time</option>
+                    {AVAILABLE_TIMES.map(time => (
+                      <option key={time} value={time}>{time}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label style={{ 
+                    display: 'block', 
+                    fontSize: '14px', 
+                    fontWeight: '500', 
+                    color: '#6b6b6b', 
+                    marginBottom: '10px',
+                    letterSpacing: '0.3px'
+                  }}>
+                    Number of Guests
+                  </label>
+                  <input
+                    type="number"
+                    name="guests"
+                    value={formData.guests}
+                    onChange={handleChange}
+                    min="1"
+                    max="12"
+                    required
+                    style={{
+                      width: '100%',
+                      padding: '16px 20px',
+                      border: '1px solid rgba(213, 208, 199, 0.5)',
+                      borderRadius: '8px',
+                      fontSize: '17px',
+                      outline: 'none',
+                      fontFamily: "'Inter', sans-serif",
+                      transition: 'all 0.2s ease',
+                      boxSizing: 'border-box',
+                      background: 'rgba(250, 250, 248, 0.5)',
+                      boxShadow: 'inset 0 1px 3px rgba(0, 0, 0, 0.05)'
+                    }}
+                    onFocus={(e) => {
+                      e.target.style.borderColor = '#b8956a';
+                      e.target.style.background = '#ffffff';
+                      e.target.style.boxShadow = '0 0 0 3px rgba(184, 149, 106, 0.1), inset 0 1px 3px rgba(0, 0, 0, 0.05)';
+                    }}
+                    onBlur={(e) => {
+                      e.target.style.borderColor = 'rgba(213, 208, 199, 0.5)';
+                      e.target.style.background = 'rgba(250, 250, 248, 0.5)';
+                      e.target.style.boxShadow = 'inset 0 1px 3px rgba(0, 0, 0, 0.05)';
+                    }}
+                  />
+                </div>
+              </div>
+
+              <button
+                onClick={checkAvailability}
+                disabled={!formData.reservationDate || !formData.reservationTime || !formData.guests || checkingAvailability}
+                style={{
+                  background: checkingAvailability ? 'linear-gradient(135deg, #999 0%, #777 100%)' : 'linear-gradient(135deg, #b8956a 0%, #9d7f57 100%)',
+                  color: 'white',
+                  padding: '14px 28px',
+                  borderRadius: '8px',
+                  fontWeight: '500',
+                  fontSize: '14px',
+                  border: 'none',
+                  cursor: checkingAvailability ? 'not-allowed' : 'pointer',
+                  letterSpacing: '0.3px',
+                  fontFamily: "'Inter', sans-serif",
+                  transition: 'all 0.3s ease',
+                  marginBottom: '20px',
+                  boxShadow: '0 4px 12px rgba(184, 149, 106, 0.3)'
+                }}
+                onMouseOver={(e) => {
+                  if (!checkingAvailability && formData.reservationDate && formData.reservationTime && formData.guests) {
+                    e.target.style.transform = 'translateY(-2px)';
+                    e.target.style.boxShadow = '0 6px 16px rgba(184, 149, 106, 0.4)';
+                  }
+                }}
+                onMouseOut={(e) => {
+                  if (!checkingAvailability) {
+                    e.target.style.transform = 'translateY(0)';
+                    e.target.style.boxShadow = '0 4px 12px rgba(184, 149, 106, 0.3)';
+                  }
+                }}
+              >
+                {checkingAvailability ? 'Checking...' : 'Check Availability'}
+              </button>
+
+              {availability && (
+                <div style={{
+                  padding: '20px',
+                  background: availability.available 
+                    ? 'linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%)' 
+                    : 'linear-gradient(135deg, #f8d7da 0%, #f5c6cb 100%)',
+                  border: `1px solid ${availability.available ? 'rgba(40, 167, 69, 0.3)' : 'rgba(220, 53, 69, 0.3)'}`,
+                  borderRadius: '10px',
+                  color: availability.available ? '#155724' : '#721c24',
+                  marginBottom: '20px',
+                  boxShadow: availability.available 
+                    ? '0 4px 12px rgba(40, 167, 69, 0.1)' 
+                    : '0 4px 12px rgba(220, 53, 69, 0.1)'
+                }}>
+                  {availability.available ? (
+                    <>
+                      <p style={{ margin: 0, fontWeight: '600', fontSize: '15px' }}>✅ Available!</p>
+                      <p style={{ margin: '8px 0 0 0', fontSize: '14px' }}>
+                        {availability.seatsLeft} seats remaining for this date
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <p style={{ margin: 0, fontWeight: '600', fontSize: '15px' }}>❌ Not Available</p>
+                      <p style={{ margin: '8px 0 0 0', fontSize: '14px' }}>
+                        {availability.reason}
+                      </p>
+                    </>
+                  )}
+                </div>
+              )}
+
+              <div style={{
+                background: 'linear-gradient(135deg, rgba(184, 149, 106, 0.08) 0%, rgba(184, 149, 106, 0.04) 100%)',
+                borderRadius: '10px',
+                padding: '24px',
+                border: '1px solid rgba(184, 149, 106, 0.15)',
+                boxShadow: 'inset 0 1px 2px rgba(184, 149, 106, 0.1)'
+              }}>
+                <p style={{ 
+                  fontSize: '17px', 
+                  fontWeight: '400', 
+                  color: '#6b6b6b',
+                  margin: 0
+                }}>
+                  Total Amount: <span style={{ 
+                    color: '#b8956a', 
+                    fontWeight: '600',
+                    fontSize: '34px',
+                    fontFamily: "'Inter', sans-serif",
+                    marginLeft: '8px'
+                  }}>${totalAmount.toFixed(2)}</span> <span style={{ fontSize: '14px', color: '#999' }}>USD</span>
+                </p>
+                <p style={{ fontSize: '14px', color: '#999', margin: '8px 0 0 0' }}>
+                  {formData.guests} guest{formData.guests !== 1 ? 's' : ''} × $330 USD
+                </p>
+              </div>
+            </div>
+
+            {/* Resto del formulario - información personal, alergias, pago, etc. */}
+            {/* (El resto del código continúa igual...) */}
+            
+            {/* Información Personal */}
             <div style={{ marginBottom: '35px' }}>
               <h3 style={{
                 fontSize: '11px',
@@ -363,7 +715,7 @@ export default function TicketForm() {
                 letterSpacing: '2px',
                 textTransform: 'uppercase'
               }}>
-                Personal Information
+                Guest Information
               </h3>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px', marginBottom: '16px' }}>
                 <div>
@@ -453,7 +805,113 @@ export default function TicketForm() {
                   />
                 </div>
               </div>
-              <div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px' }}>
+                <div>
+                  <label style={{ 
+                    display: 'block', 
+                    fontSize: '14px', 
+                    fontWeight: '500', 
+                    color: '#6b6b6b', 
+                    marginBottom: '10px',
+                    letterSpacing: '0.3px'
+                  }}>
+                    Email Address
+                  </label>
+                  <input
+                    type="email"
+                    name="email"
+                    value={formData.email}
+                    onChange={handleChange}
+                    required
+                    placeholder="john@example.com"
+                    style={{
+                      width: '100%',
+                      padding: '16px 20px',
+                      border: '1px solid rgba(213, 208, 199, 0.5)',
+                      borderRadius: '8px',
+                      fontSize: '17px',
+                      outline: 'none',
+                      fontFamily: "'Inter', sans-serif",
+                      transition: 'all 0.2s ease',
+                      boxSizing: 'border-box',
+                      background: 'rgba(250, 250, 248, 0.5)',
+                      boxShadow: 'inset 0 1px 3px rgba(0, 0, 0, 0.05)'
+                    }}
+                    onFocus={(e) => {
+                      e.target.style.borderColor = '#b8956a';
+                      e.target.style.background = '#ffffff';
+                      e.target.style.boxShadow = '0 0 0 3px rgba(184, 149, 106, 0.1), inset 0 1px 3px rgba(0, 0, 0, 0.05)';
+                    }}
+                    onBlur={(e) => {
+                      e.target.style.borderColor = 'rgba(213, 208, 199, 0.5)';
+                      e.target.style.background = 'rgba(250, 250, 248, 0.5)';
+                      e.target.style.boxShadow = 'inset 0 1px 3px rgba(0, 0, 0, 0.05)';
+                    }}
+                  />
+                </div>
+                <div>
+                  <label style={{ 
+                    display: 'block', 
+                    fontSize: '14px', 
+                    fontWeight: '500', 
+                    color: '#6b6b6b', 
+                    marginBottom: '10px',
+                    letterSpacing: '0.3px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '5px'
+                  }}>
+                    <Phone size={14} />
+                    Phone Number
+                  </label>
+                  <input
+                    type="tel"
+                    name="phone"
+                    value={formData.phone}
+                    onChange={handleChange}
+                    required
+                    placeholder="+1 (234) 567-8900"
+                    style={{
+                      width: '100%',
+                      padding: '16px 20px',
+                      border: '1px solid rgba(213, 208, 199, 0.5)',
+                      borderRadius: '8px',
+                      fontSize: '17px',
+                      outline: 'none',
+                      fontFamily: "'Inter', sans-serif",
+                      transition: 'all 0.2s ease',
+                      boxSizing: 'border-box',
+                      background: 'rgba(250, 250, 248, 0.5)',
+                      boxShadow: 'inset 0 1px 3px rgba(0, 0, 0, 0.05)'
+                    }}
+                    onFocus={(e) => {
+                      e.target.style.borderColor = '#b8956a';
+                      e.target.style.background = '#ffffff';
+                      e.target.style.boxShadow = '0 0 0 3px rgba(184, 149, 106, 0.1), inset 0 1px 3px rgba(0, 0, 0, 0.05)';
+                    }}
+                    onBlur={(e) => {
+                      e.target.style.borderColor = 'rgba(213, 208, 199, 0.5)';
+                      e.target.style.background = 'rgba(250, 250, 248, 0.5)';
+                      e.target.style.boxShadow = 'inset 0 1px 3px rgba(0, 0, 0, 0.05)';
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Alergias y Special Requests */}
+            <div style={{ marginBottom: '35px' }}>
+              <h3 style={{
+                fontSize: '11px',
+                fontWeight: '600',
+                color: '#b8956a',
+                marginBottom: '20px',
+                letterSpacing: '2px',
+                textTransform: 'uppercase'
+              }}>
+                Dietary Preferences
+              </h3>
+              <div style={{ marginBottom: '16px' }}>
                 <label style={{ 
                   display: 'block', 
                   fontSize: '14px', 
@@ -462,15 +920,14 @@ export default function TicketForm() {
                   marginBottom: '10px',
                   letterSpacing: '0.3px'
                 }}>
-                  Email Address
+                  Allergies or Dietary Restrictions
                 </label>
-                <input
-                  type="email"
-                  name="email"
-                  value={formData.email}
+                <textarea
+                  name="allergies"
+                  value={formData.allergies}
                   onChange={handleChange}
-                  required
-                  placeholder="john@example.com"
+                  placeholder="Please list any allergies or dietary restrictions..."
+                  rows="3"
                   style={{
                     width: '100%',
                     padding: '16px 20px',
@@ -482,7 +939,51 @@ export default function TicketForm() {
                     transition: 'all 0.2s ease',
                     boxSizing: 'border-box',
                     background: 'rgba(250, 250, 248, 0.5)',
-                    boxShadow: 'inset 0 1px 3px rgba(0, 0, 0, 0.05)'
+                    boxShadow: 'inset 0 1px 3px rgba(0, 0, 0, 0.05)',
+                    resize: 'vertical'
+                  }}
+                  onFocus={(e) => {
+                    e.target.style.borderColor = '#b8956a';
+                    e.target.style.background = '#ffffff';
+                    e.target.style.boxShadow = '0 0 0 3px rgba(184, 149, 106, 0.1), inset 0 1px 3px rgba(0, 0, 0, 0.05)';
+                  }}
+                  onBlur={(e) => {
+                    e.target.style.borderColor = 'rgba(213, 208, 199, 0.5)';
+                    e.target.style.background = 'rgba(250, 250, 248, 0.5)';
+                    e.target.style.boxShadow = 'inset 0 1px 3px rgba(0, 0, 0, 0.05)';
+                  }}
+                />
+              </div>
+              <div>
+                <label style={{ 
+                  display: 'block', 
+                  fontSize: '14px', 
+                  fontWeight: '500', 
+                  color: '#6b6b6b', 
+                  marginBottom: '10px',
+                  letterSpacing: '0.3px'
+                }}>
+                  Special Requests (Optional)
+                </label>
+                <textarea
+                  name="specialRequests"
+                  value={formData.specialRequests}
+                  onChange={handleChange}
+                  placeholder="Any special occasions or preferences..."
+                  rows="3"
+                  style={{
+                    width: '100%',
+                    padding: '16px 20px',
+                    border: '1px solid rgba(213, 208, 199, 0.5)',
+                    borderRadius: '8px',
+                    fontSize: '17px',
+                    outline: 'none',
+                    fontFamily: "'Inter', sans-serif",
+                    transition: 'all 0.2s ease',
+                    boxSizing: 'border-box',
+                    background: 'rgba(250, 250, 248, 0.5)',
+                    boxShadow: 'inset 0 1px 3px rgba(0, 0, 0, 0.05)',
+                    resize: 'vertical'
                   }}
                   onFocus={(e) => {
                     e.target.style.borderColor = '#b8956a';
@@ -498,74 +999,7 @@ export default function TicketForm() {
               </div>
             </div>
 
-            <div style={{ marginBottom: '35px' }}>
-              <label style={{ 
-                display: 'block', 
-                fontSize: '14px', 
-                fontWeight: '500', 
-                color: '#6b6b6b', 
-                marginBottom: '10px',
-                letterSpacing: '0.3px'
-              }}>
-                Number of Guests
-              </label>
-              <input
-                type="number"
-                name="guests"
-                value={formData.guests}
-                onChange={handleChange}
-                min="1"
-                max="20"
-                required
-                style={{
-                  width: '100%',
-                  padding: '16px 20px',
-                  border: '1px solid rgba(213, 208, 199, 0.5)',
-                  borderRadius: '8px',
-                  fontSize: '17px',
-                  outline: 'none',
-                  fontFamily: "'Inter', sans-serif",
-                  transition: 'all 0.2s ease',
-                  boxSizing: 'border-box',
-                  background: 'rgba(250, 250, 248, 0.5)',
-                  boxShadow: 'inset 0 1px 3px rgba(0, 0, 0, 0.05)'
-                }}
-                onFocus={(e) => {
-                  e.target.style.borderColor = '#b8956a';
-                  e.target.style.background = '#ffffff';
-                  e.target.style.boxShadow = '0 0 0 3px rgba(184, 149, 106, 0.1), inset 0 1px 3px rgba(0, 0, 0, 0.05)';
-                }}
-                onBlur={(e) => {
-                  e.target.style.borderColor = 'rgba(213, 208, 199, 0.5)';
-                  e.target.style.background = 'rgba(250, 250, 248, 0.5)';
-                  e.target.style.boxShadow = 'inset 0 1px 3px rgba(0, 0, 0, 0.05)';
-                }}
-              />
-              <div style={{
-                marginTop: '16px',
-                background: 'linear-gradient(135deg, rgba(184, 149, 106, 0.08) 0%, rgba(184, 149, 106, 0.04) 100%)',
-                borderRadius: '10px',
-                padding: '24px',
-                border: '1px solid rgba(184, 149, 106, 0.15)',
-                boxShadow: 'inset 0 1px 2px rgba(184, 149, 106, 0.1)'
-              }}>
-                <p style={{ 
-                  fontSize: '17px', 
-                  fontWeight: '400', 
-                  color: '#6b6b6b',
-                  margin: 0
-                }}>
-                  Total Amount: <span style={{ 
-                    color: '#b8956a', 
-                    fontWeight: '600',
-                    fontSize: '34px',
-                    fontFamily: "'Inter', sans-serif",
-                    marginLeft: '8px'
-                  }}>${totalAmount.toFixed(2)}</span> <span style={{ fontSize: '14px', color: '#999' }}>USD</span>
-                </p>
-              </div>
-            </div>
-
+            {/* Información de Pago */}
             <div style={{ marginBottom: '35px' }}>
               <h3 style={{
                 fontSize: '11px',
@@ -721,6 +1155,7 @@ export default function TicketForm() {
               </div>
             </div>
 
+            {/* Dirección de Facturación */}
             <div style={{ marginBottom: '35px' }}>
               <h3 style={{
                 fontSize: '11px',
@@ -824,20 +1259,25 @@ export default function TicketForm() {
               </div>
             </div>
 
+            {/* Botón de Envío */}
             <button
               onClick={handleSubmit}
-              disabled={loading}
+              disabled={loading || !availability || !availability.available}
               style={{
                 width: '100%',
-                background: loading ? 'linear-gradient(135deg, #999 0%, #777 100%)' : 'linear-gradient(135deg, #2c2c2c 0%, #1a1a1a 100%)',
+                background: (loading || !availability || !availability.available) 
+                  ? 'linear-gradient(135deg, #999 0%, #777 100%)' 
+                  : 'linear-gradient(135deg, #2c2c2c 0%, #1a1a1a 100%)',
                 color: 'white',
                 padding: '18px',
                 borderRadius: '10px',
                 fontWeight: '500',
                 fontSize: '16px',
                 border: 'none',
-                cursor: loading ? 'not-allowed' : 'pointer',
-                boxShadow: loading ? 'none' : '0 8px 24px rgba(0, 0, 0, 0.2)',
+                cursor: (loading || !availability || !availability.available) ? 'not-allowed' : 'pointer',
+                boxShadow: (loading || !availability || !availability.available) 
+                  ? 'none' 
+                  : '0 8px 24px rgba(0, 0, 0, 0.2)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -847,13 +1287,13 @@ export default function TicketForm() {
                 transition: 'all 0.3s ease'
               }}
               onMouseOver={(e) => {
-                if (!loading) {
+                if (!loading && availability && availability.available) {
                   e.target.style.transform = 'translateY(-2px)';
                   e.target.style.boxShadow = '0 12px 32px rgba(0, 0, 0, 0.25)';
                 }
               }}
               onMouseOut={(e) => {
-                if (!loading) {
+                if (!loading && availability && availability.available) {
                   e.target.style.transform = 'translateY(0)';
                   e.target.style.boxShadow = '0 8px 24px rgba(0, 0, 0, 0.2)';
                 }
@@ -874,14 +1314,14 @@ export default function TicketForm() {
               ) : (
                 <>
                   <Send size={18} />
-                  Complete Purchase — ${totalAmount.toFixed(2)} USD
+                  Confirm Reservation — ${totalAmount.toFixed(2)} USD
                 </>
               )}
             </button>
 
             <p style={{ 
               textAlign: 'center', 
-              fontSize: '14px', 
+              fontSize: '12px', 
               color: '#999', 
               marginTop: '20px',
               fontWeight: '400',
